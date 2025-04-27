@@ -1,3 +1,15 @@
+/*******************************************************************
+ * project: eeprom pro
+ * 版本更新记录:
+ *   - v1.0.0 (2025-04-27)
+ *     - 初始版本，实现基础功能,单路烧录，需配和 v4l2-ctl 使用
+ *   - v1.0.1
+ *     - 新增版本号，makefile   
+ *   - v1.1.0 (2025-04-27)
+ *     - 
+ *     - 
+ *******************************************************************/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <fcntl.h>
@@ -8,6 +20,15 @@
 #include <string.h>
 
 #include "init.h"
+
+// 通过编译器注入的宏
+#ifndef VERSION
+#define VERSION "unknown"
+#endif
+
+#ifndef BUILD_TIME
+#define BUILD_TIME __DATE__ " " __TIME__
+#endif
 
 #define SAVE_ON 1
 #define SAVE_FILE "read_file.bin"
@@ -183,6 +204,11 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    if (argc > 1 && strcmp(argv[1], "--version") == 0) {
+        printf("程序版本: %s\n编译时间: %s\n", VERSION, BUILD_TIME);
+        return 0;
+    }
+
     uint8_t data[MAX_SIZE];
     int file_size = read_bin_file(argv[1], data, MAX_SIZE);
     printf("file: %s , size: %d \n", argv[1], file_size);
@@ -204,7 +230,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    sc320_multi_reg_write(i2c_fd, SC320AT_CFG, 5);
+    sc320_multi_reg_write(i2c_fd, (struct reg_sequence *)SC320AT_CFG, 5);
 
 #endif
 
