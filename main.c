@@ -6,8 +6,8 @@
  *   - v1.0.1
  *     - 新增版本号，makefile   
  *   - v1.1.0 (2025-04-27)
- *     - 
- *     - 
+ *     -  新增4通道烧录
+ *     -  
  *******************************************************************/
 
 #include <stdio.h>
@@ -29,6 +29,8 @@
 #ifndef BUILD_TIME
 #define BUILD_TIME __DATE__ " " __TIME__
 #endif
+
+#define CHANNEL_N   4
 
 #define SAVE_ON 1
 #define SAVE_FILE "read_file.bin"
@@ -196,9 +198,46 @@ int verify_eeprom(int i2c_fd, uint16_t addr, uint8_t *data, size_t len) {
     return memcmp(data, read_buf, len) == 0 ? 0 : -1;
 }
 
+int falsh_pro(int fd, uint8_t *data, uint32_t len)
+{
+    int i2c_fd = fd;
+    #if SC320_OP
+    if (ioctl(i2c_fd, I2C_SLAVE, SC320_ADDR) < 0) {
+        perror("Failed to set SC320 slave address");
+        close(i2c_fd);
+        return 1;
+    }
 
+    sc320_multi_reg_write(i2c_fd, (struct reg_sequence *)SC320AT_CFG, 5);
+
+#endif
+
+    if (ioctl(i2c_fd, I2C_SLAVE, EEPROM_ADDR) < 0) {
+        perror("Failed to set I2C slave address");
+        close(i2c_fd);
+        return 1;
+    }
+
+    erase_full(i2c_fd);
+    printf("Writing to EEPROM...\n");
+    if (write_eeprom(i2c_fd, 0, data, len) != 0) {
+        close(i2c_fd);
+        return 1;
+    }
+
+    printf("Verifying EEPROM...\n");
+    if (verify_eeprom(i2c_fd, 0, data, len) != 0) {
+        printf("EEPROM verification failed!\n");
+        close(i2c_fd);
+        return 1;
+    }
+
+    printf("EEPROM write and verify success!\n");
+    return 0;
+}
 
 int main(int argc, char *argv[]) {
+    int ret;
     if (argc != 2) {
         printf("Usage: %s <filename.bin>\n", argv[0]);
         return 1;
@@ -223,38 +262,22 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-#if SC320_OP
-    if (ioctl(i2c_fd, I2C_SLAVE, SC320_ADDR) < 0) {
-        perror("Failed to set SC320 slave address");
-        close(i2c_fd);
-        return 1;
+    for (int i = 0; i < CHANNEL_N; i++)
+    {
+        char cmd[32];
+        sprintf(cmd, "v4l2-ctl --set-ctrl=gain=%d",i);
+        printf("flash chl %d\n", i);
+        system(cmd);
+
+        ret = falsh_pro(i2c_fd, data, file_size);
+        if (ret)
+        {
+            printf("flash chl %d failed\n", i);
+            continue;
+        }
+        printf("flash chl %d success\n", i);
     }
 
-    sc320_multi_reg_write(i2c_fd, (struct reg_sequence *)SC320AT_CFG, 5);
-
-#endif
-
-    if (ioctl(i2c_fd, I2C_SLAVE, EEPROM_ADDR) < 0) {
-        perror("Failed to set I2C slave address");
-        close(i2c_fd);
-        return 1;
-    }
-
-    erase_full(i2c_fd);
-    printf("Writing to EEPROM...\n");
-    if (write_eeprom(i2c_fd, 0, data, file_size) != 0) {
-        close(i2c_fd);
-        return 1;
-    }
-
-    printf("Verifying EEPROM...\n");
-    if (verify_eeprom(i2c_fd, 0, data, file_size) != 0) {
-        printf("EEPROM verification failed!\n");
-        close(i2c_fd);
-        return 1;
-    }
-
-    printf("EEPROM write and verify success!\n");
     close(i2c_fd);
     return 0;
 }
