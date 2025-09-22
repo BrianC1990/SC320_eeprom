@@ -30,7 +30,9 @@
 #define BUILD_TIME __DATE__ " " __TIME__
 #endif
 
-#define CHANNEL_N   4
+#define EE_WRITW   1
+
+#define CHANNEL_N  4
 
 #define SAVE_ON 1
 #define SAVE_FILE "read_file.bin"
@@ -49,7 +51,14 @@ struct reg_sequence {
     // unsigned int delay_us;
 };
 
-
+int isProcessRunning(const char *processName) {
+    char command[256];
+    // 使用ps和grep命令查找进程
+    sprintf(command, "ps aux | grep \"%s\" | grep -v grep > /dev/null", processName);
+    
+    // system返回0表示grep找到了进程(进程存在)
+    return system(command) == 0;
+}
 
 // 读取二进制文件
 int read_bin_file(const char *filename, uint8_t *buf, size_t max_size) {
@@ -83,7 +92,7 @@ static int sc320_multi_reg_write(int i2c_fd, const struct reg_sequence* regs, in
 {
     for (int i = 0; i < num_regs; i++) {
         write_page(i2c_fd, regs[i].reg, (uint8_t *)&regs[i].def, 1);
-        printf("reg write : i=%d, 0x%02x, 0x%02x\n", i, regs[i].reg, regs[i].def);
+        // printf("reg write : i=%d, 0x%02x, 0x%02x\n", i, regs[i].reg, regs[i].def);
         // if (regs[i].delay_us > 0) {
         //     usleep(regs[i].delay_us);
         // }
@@ -94,8 +103,9 @@ static int sc320_multi_reg_write(int i2c_fd, const struct reg_sequence* regs, in
 
 void erase_full(int i2c_fd) {
     uint8_t blank_page[PAGE_SIZE];
+    uint8_t read_page[PAGE_SIZE];
+
     memset(blank_page, 0xFF, PAGE_SIZE); // 填充0xFF
-    
     printf("Erasing EEPROM...\n");
     for (uint16_t addr = 0; addr < MAX_SIZE; addr += PAGE_SIZE) {
         if (write_page(i2c_fd, addr, blank_page, PAGE_SIZE) != 0) {
@@ -106,6 +116,35 @@ void erase_full(int i2c_fd) {
         if (addr % 1024 == 0) printf(".");
     }
     printf("\nErase complete!\n");
+
+    // 校验所有字节是否为0xFF
+    for (uint16_t addr = 0; addr < MAX_SIZE; addr += PAGE_SIZE) {
+        // 设置读取地址
+        uint8_t addr_buf[2] = {addr >> 8, addr & 0xFF};
+        if (write(i2c_fd, addr_buf, sizeof(addr_buf)) != sizeof(addr_buf)) {
+            perror("Failed to set read address");
+            return;
+        }
+        
+        // 读取一页数据
+        if (read(i2c_fd, read_page, PAGE_SIZE) != PAGE_SIZE) {
+            perror("Failed to read verification data");
+            return;
+        }
+        
+        // 检查每个字节
+        for (int i = 0; i < PAGE_SIZE; i++) {
+            if (read_page[i] != 0xFF) {
+                fprintf(stderr, "Verification failed at 0x%04X! Found 0x%02X\n", 
+                        addr + i, read_page[i]);
+                return;
+            }
+        }
+        
+        // 进度显示
+        if (addr % 1024 == 0) printf(".");
+    }
+    printf("\nEEPROM fully erased and verified!\n");
 }
 
 // 写入 EEPROM（按页写入）
@@ -219,6 +258,8 @@ int falsh_pro(int fd, uint8_t *data, uint32_t len)
     }
 
     erase_full(i2c_fd);
+
+#if EE_WRITW
     printf("Writing to EEPROM...\n");
     if (write_eeprom(i2c_fd, 0, data, len) != 0) {
         close(i2c_fd);
@@ -232,21 +273,30 @@ int falsh_pro(int fd, uint8_t *data, uint32_t len)
         return 1;
     }
 
+
     printf("EEPROM write and verify success!\n");
+#endif
     return 0;
+
 }
 
 int main(int argc, char *argv[]) {
     int ret;
+
+#if EE_WRITE
     if (argc != 2) {
         printf("Usage: %s <filename.bin>\n", argv[0]);
         return 1;
     }
+#endif
 
     if (argc > 1 && strcmp(argv[1], "--version") == 0) {
         printf("程序版本: %s\n编译时间: %s\n", VERSION, BUILD_TIME);
         return 0;
     }
+
+    system("v4l2-ctl -d /dev/video0 --stream-mmap > /dev/null 2>&1 &");
+    sleep(8);
 
     uint8_t data[MAX_SIZE];
     int file_size = read_bin_file(argv[1], data, MAX_SIZE);
@@ -265,8 +315,10 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < CHANNEL_N; i++)
     {
         char cmd[32];
-        sprintf(cmd, "v4l2-ctl --set-ctrl=gain=%d",i);
+        sprintf(cmd, "v4l2-ctl --set-ctrl=gain=%d\n",i);
         printf("flash chl %d\n", i);
+        // printf(cmd);
+
         system(cmd);
 
         ret = falsh_pro(i2c_fd, data, file_size);
@@ -275,9 +327,16 @@ int main(int argc, char *argv[]) {
             printf("flash chl %d failed\n", i);
             continue;
         }
-        printf("flash chl %d success\n", i);
+        printf("flash chl %d success\n\n\n", i);
+
+        sleep(5);
+
     }
 
     close(i2c_fd);
+
+    system("killall v4l2-ctl");
+    printf("flash done!!!\n");
+
     return 0;
 }
