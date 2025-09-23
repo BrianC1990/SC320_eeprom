@@ -8,6 +8,8 @@
  *   - v1.1.0 (2025-04-27)
  *     -  新增4通道烧录
  *     -  
+ *   - V1.2.0 (2025-09-22)
+ *     -  新增到支持 video1 烧录
  *******************************************************************/
 
 #include <stdio.h>
@@ -30,6 +32,9 @@
 #define BUILD_TIME __DATE__ " " __TIME__
 #endif
 
+#define VIDEO_CH0   0
+#define VIDEO_CH1   1
+
 #define EE_WRITW   1
 
 #define CHANNEL_N  4
@@ -40,7 +45,10 @@
 #define SC320_OP 1
 #define SC320_ADDR 0x30
 
-#define I2C_DEV "/dev/i2c-2"    // I2C 设备文件（根据实际情况修改）
+#define I2C_DEV "/dev/i2c-2"    // I2C 设备文件（根据实际情况修改） - video0
+#define I2C_DEV_1 "/dev/i2c-10"    // I2C 设备文件（根据实际情况修改） - video1
+
+
 #define EEPROM_ADDR 0x50        // P24C64C 的 I2C 地址（默认 0x50）
 #define PAGE_SIZE 32            // P24C64C 页写入大小（最大 32 字节）
 #define MAX_SIZE 8192           // P24C64C 总容量 8KB (64Kbit)
@@ -282,9 +290,10 @@ int falsh_pro(int fd, uint8_t *data, uint32_t len)
 
 int main(int argc, char *argv[]) {
     int ret;
-
+    int video_ch = VIDEO_CH0;
+    char i2c_dev[16] = {0};
 #if EE_WRITE
-    if (argc != 2) {
+    if (argc < 2) {
         printf("Usage: %s <filename.bin>\n", argv[0]);
         return 1;
     }
@@ -295,18 +304,38 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    system("v4l2-ctl -d /dev/video0 --stream-mmap > /dev/null 2>&1 &");
-    sleep(8);
+    if (argc = 3 && ((strcmp(argv[2], "video0") == 0) || (strcmp(argv[2], "video1") == 0) )) {
+        if (strcmp(argv[2], "video1") == 0)
+        {
+            video_ch = VIDEO_CH1;
+            printf("do video1\n");
+        }
+        else
+        {
+            video_ch = VIDEO_CH0;
+            printf("do video0\n");
+        }
+    }
 
     uint8_t data[MAX_SIZE];
     int file_size = read_bin_file(argv[1], data, MAX_SIZE);
     printf("file: %s , size: %d \n", argv[1], file_size);
-
     if (file_size <= 0) {
         return 1;
     }
 
-    int i2c_fd = open(I2C_DEV, O_RDWR);
+    if (video_ch == VIDEO_CH1) {
+        system("v4l2-ctl -d /dev/video1 --stream-mmap > /dev/null 2>&1 &");
+        memcpy(i2c_dev, I2C_DEV_1, sizeof(I2C_DEV_1));
+    }
+    else{
+        system("v4l2-ctl -d /dev/video0 --stream-mmap > /dev/null 2>&1 &");
+        memcpy(i2c_dev, I2C_DEV, sizeof(I2C_DEV));
+    }
+    sleep(8);
+
+    
+    int i2c_fd = open(i2c_dev, O_RDWR);
     if (i2c_fd < 0) {
         perror("Failed to open I2C device");
         return 1;
@@ -314,8 +343,15 @@ int main(int argc, char *argv[]) {
 
     for (int i = 0; i < CHANNEL_N; i++)
     {
-        char cmd[32];
-        sprintf(cmd, "v4l2-ctl --set-ctrl=gain=%d\n",i);
+        char cmd[64];
+
+        if (video_ch == VIDEO_CH1) {
+            sprintf(cmd, "v4l2-ctl -d /dev/video1 --set-ctrl=gain=%d\n",i);
+        }
+        else {
+            sprintf(cmd, "v4l2-ctl -d /dev/video0 --set-ctrl=gain=%d\n",i);
+        }
+        // sprintf(cmd, "v4l2-ctl --set-ctrl=gain=%d\n",i);
         printf("flash chl %d\n", i);
         // printf(cmd);
 
@@ -330,7 +366,6 @@ int main(int argc, char *argv[]) {
         printf("flash chl %d success\n\n\n", i);
 
         sleep(5);
-
     }
 
     close(i2c_fd);
